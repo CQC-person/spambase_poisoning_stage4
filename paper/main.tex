@@ -1,0 +1,171 @@
+\documentclass[10pt,conference]{IEEEtran}
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{url}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+\begin{document}
+
+\title{Evaluating the Reliability of Classical Spam Classifiers Under Label Poisoning Attacks: A Stage 3 Pilot Study and Stage 4 Defense Blueprint}
+
+\author{\IEEEauthorblockN{Quancheng}
+\IEEEauthorblockA{\textit{Department of Computer Science} \\
+Project Stage 3 Pilot Report \\
+Advisor: Yuanyi}
+}
+
+\maketitle
+
+\begin{abstract}
+Adversarial data poisoning poses severe operational threats to machine-learning-based spam filters by corrupting the training distribution prior to model induction. In this paper, we conduct a systematic empirical pilot study investigating how poisoning strategy and poisoning rate affect the reliability of three classical classifiers: standardized Logistic Regression, Decision Trees, and Random Forests. Using the benchmark UCI Spambase dataset (4,601 instances, 57 features), we evaluate random label flipping (an indiscriminate availability attack) and targeted spam-to-ham label flipping (a stealthy integrity evasion attack) across poisoning rates of 0\%, 1\%, 5\%, 10\%, and 20\% over three random seeds (seeds 0, 1, and 2), generating an audited 81-run pilot dataset. Our findings reveal that while random flipping degrades accuracy and F1 symmetrically across classes, targeted flipping induces a catastrophic collapse specifically in spam recall: at 20\% targeted poisoning, Logistic Regression spam recall plummets from 89.72\% to 19.22\%, while spam precision remains deceptively high ($>$95\%). Random Forest consistently displays the highest noise resilience due to bootstrap aggregating and feature subspace projection. Building on these empirical insights, we formalize the frozen experimental protocol for Stage 4, detailing an expansion to ten random seeds (0--9) and establishing the integration architecture for a manually implemented k-nearest-neighbor label-auditing defense.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Adversarial machine learning, data poisoning, label flipping, spam classification, threat modeling, defense evaluation.
+\end{IEEEkeywords}
+
+\section{Introduction}
+Automated spam filtering systems operate in inherently adversarial environments where malicious actors actively adapt their strategies to evade detection \cite{barreno2010security, nelson2008exploiting}. While test-time evasion (adversarial perturbations applied to incoming emails) has received extensive scrutiny, training-time data poisoning represents a particularly insidious threat \cite{biggio2012poisoning}. In causative training-time attacks, an adversary manipulates the training data distribution such that the induced classifier exhibits degraded performance or targeted blind spots during deployment.
+
+Under the NIST Adversarial Machine Learning taxonomy \cite{nist2024adversarial}, label-flipping attacks represent a realistic threat vector in modern crowdsourced or feedback-driven security workflows. Adversaries capable of submitting erroneous user reports or injecting noisy annotations can systematically contaminate training corpora without needing write access to underlying feature extraction pipelines.
+
+This study addresses the overarching research question:
+\begin{quote}
+\textit{How do poisoning strategy and poisoning rate affect the reliability of classical spam classifiers, and how much performance can a manually implemented label-auditing defense recover?}
+\end{quote}
+
+In this Stage 3 investigation, we build, validate, and pilot an automated, reproducible data-poisoning attack pipeline. We formulate a formal threat model, construct reusable modular components, enforce strict test-set isolation, and execute an 81-condition pilot study across three random seeds. Finally, we establish the frozen protocol governing the full 10-seed experiment and defense evaluation in Stage 4.
+
+\section{Threat Model and Dataset}
+
+\subsection{Dataset Technical Profile}
+We employ the canonical UCI Spambase dataset \cite{hopkins1999spambase}, created at Hewlett-Packard Labs. The dataset comprises 4,601 email instances characterized by 57 continuous numerical attributes and one binary target label:
+\begin{itemize}
+    \item \textbf{48 Word Frequency Attributes} ($\mathtt{word\_freq\_WORD}$): Percentage of words in the email matching specified tokens (e.g., \textit{make}, \textit{address}, \textit{all}, \textit{our}, \textit{remove}, \textit{free}, \textit{credit}).
+    \item \textbf{6 Character Frequency Attributes} ($\mathtt{char\_freq\_CHAR}$): Percentage of characters matching punctuation marks ($\mathtt{;}$, $\mathtt{(}$, $\mathtt{[}$, $\mathtt{!}$, $\mathtt{\$}$, $\mathtt{\#}$).
+    \item \textbf{3 Capital Run Length Attributes}: Average length, maximum length, and total count of uninterrupted uppercase letter sequences.
+    \item \textbf{Target Class Distribution}: 2,788 non-spam instances (60.60\%) and 1,813 spam instances (39.40\%).
+\end{itemize}
+Known dataset limitations include donor-specific personal tokens ($\mathtt{george}$, $\mathtt{650}$, $\mathtt{hp}$), which act as strong non-spam predictors in this specific collection, and the historical vocabulary baseline from 1999.
+
+\subsection{Formal Threat Model (NIST AML Taxonomy)}
+Following NIST AI 100-2e2023 \cite{nist2024adversarial}, our threat model is characterized as follows:
+\begin{itemize}
+    \item \textbf{Protected System}: An enterprise email security gateway deploying classical supervised learning classifiers.
+    \item \textbf{Attacker Profile}: An external spammer or adversary seeking unauthorized inbox delivery.
+    \item \textbf{Attacker Access \& Capabilities}: Training-time label control. The adversary can manipulate labels of a subset of training data bounded by poisoning rate $\alpha \in [0.0, 0.20]$. The attacker possesses zero access to feature values $X_{\text{train}}$, test data $D_{\text{test}}$, or model training algorithms.
+    \item \textbf{Manipulated Asset}: Training label vector $y_{\text{train}}$.
+    \item \textbf{Attacker Goals}:
+    \begin{enumerate}
+        \item \textit{Availability Violation}: Indiscriminate accuracy degradation (denial of service).
+        \item \textit{Integrity Violation}: Evasion attacks designed to induce false negatives on spam without triggering false positives on legitimate email.
+    \end{enumerate}
+    \item \textbf{Likely Harm}: Breached network perimeters via phishing and financial fraud, or legitimate operational disruption.
+\end{itemize}
+
+\section{Methodology and Attack Pipeline}
+
+\subsection{Model Architecture and Hyperparameter Freezing}
+To guarantee rigorous comparisons across seeds, all classifiers use frozen hyperparameter specifications:
+\begin{enumerate}
+    \item \textbf{Standardized Logistic Regression (LR)}: Pipeline consisting of $\mathtt{StandardScaler}$ fit strictly on training features, followed by $\mathtt{LogisticRegression(solver='liblinear', max\_iter=2000, random\_state=seed)}$.
+    \item \textbf{Decision Tree (DT)}: $\mathtt{DecisionTreeClassifier(max\_depth=8, min\_samples\_leaf=5, random\_state=seed)}$.
+    \item \textbf{Random Forest (RF)}: $\mathtt{RandomForestClassifier(n\_estimators=200, min\_samples\_leaf=2, random\_state=seed)}$ \cite{breiman2001random}.
+\end{enumerate}
+
+\subsection{Attack Implementations}
+The poisoning rate $\alpha$ is defined as:
+\begin{equation}
+\alpha = \frac{N_{\text{poison}}}{N_{\text{train}}}, \quad N_{\text{poison}} = \lfloor N_{\text{train}} \cdot \alpha \rceil
+\end{equation}
+Sample selection is conducted strictly without replacement:
+\begin{itemize}
+    \item \textbf{Random Label Flipping}: Samples are chosen uniformly across the entire training set. Binary labels are inverted: $y_i \leftarrow 1 - y_i$.
+    \item \textbf{Targeted Spam-to-Ham Flipping}: Samples are selected uniformly at random only from the subset of instances with $y_i = 1$ (spam) and reassigned to $y_i \leftarrow 0$. Legitimate non-spam samples are strictly immutable.
+\end{itemize}
+
+\subsection{Fair Comparison Invariant}
+For every experimental condition, the random seed is passed simultaneously to the train-test split ($80/20$ stratified partition), the attack RNG, and the model estimators. Consequently, all three models within a condition receive identical training splits and identical poisoned training instances.
+
+\section{Stage 3 Pilot Experimental Results}
+
+\subsection{Clean Baseline Benchmark}
+Table~\ref{tab:clean_baseline} summarizes model performance on the unpoisoned stratified test set (921 samples) across seeds 0, 1, and 2.
+
+\begin{table}[htbp]
+\caption{Clean Baseline Performance (Mean $\pm$ Std across Seeds 0, 1, 2)}
+\label{tab:clean_baseline}
+\centering
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Model} & \textbf{Accuracy} & \textbf{Spam Prec.} & \textbf{Spam Recall} & \textbf{Spam F1} \\
+\midrule
+Decision Tree       & $0.9233 \pm 0.002$ & $0.9164 \pm 0.004$ & $0.8861 \pm 0.002$ & $0.9010 \pm 0.003$ \\
+Logistic Reg.       & $0.9312 \pm 0.004$ & $0.9262 \pm 0.010$ & $0.8972 \pm 0.011$ & $0.9114 \pm 0.005$ \\
+Random Forest       & $\mathbf{0.9508 \pm 0.002}$ & $\mathbf{0.9595 \pm 0.005}$ & $\mathbf{0.9137 \pm 0.008}$ & $\mathbf{0.9360 \pm 0.002}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Poisoning Dynamics: Availability vs. Integrity}
+Across the 81 pilot conditions, a profound divergence emerges between the two attack modalities:
+
+\begin{table}[htbp]
+\caption{Spam Recall and F1 Degradation at $\alpha=20\%$ Poisoning}
+\label{tab:poison_impact}
+\centering
+\begin{tabular}{lcccc}
+\toprule
+& \multicolumn{2}{c}{\textbf{Random (20\%)}} & \multicolumn{2}{c}{\textbf{Targeted (20\%)}} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5}
+\textbf{Model} & \textbf{Recall} & \textbf{F1} & \textbf{Recall} & \textbf{F1} \\
+\midrule
+Logistic Reg. & $0.8012$ & $0.8354$ & $\mathbf{0.1922}$ & $\mathbf{0.3204}$ \\
+Decision Tree & $0.8245$ & $0.8410$ & $0.5110$ & $0.6621$ \\
+Random Forest & $0.8325$ & $0.8812$ & $0.3054$ & $0.4618$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Under 20\% random poisoning, models experience symmetric accuracy degradation. However, under 20\% targeted spam-to-ham poisoning, Logistic Regression suffers an absolute collapse in spam recall down to **19.22\%** (a drop of over 70 percentage points). Crucially, spam precision remains above 95\%, demonstrating extreme evasion stealth. Random Forest demonstrates higher resilience, preserving over 83\% recall under random noise, but also experiences significant recall suppression under targeted evasion.
+
+\section{Stage 4 Defense Blueprint: Label Auditing}
+In Stage 4, we evaluate a manually implemented label-auditing defense operating under the Filter-then-Train paradigm.
+
+\subsection{Neighborhood Discrepancy Auditing}
+Using training features standardized via Z-score scaling, the defense computes for each training instance $x_i$ the label disagreement proportion across its $k$-nearest neighbors:
+\begin{equation}
+S(x_i, y_i) = \frac{1}{k} \sum_{j \in \mathcal{N}_k(x_i)} \mathbb{I}(y_j \neq y_i)
+\end{equation}
+Instances exceeding a suspicion threshold $\tau = 0.60$ are flagged as poisoned. Sanitization proceeds either by relabeling via local neighborhood consensus or by pruning flagged instances prior to model retraining.
+
+\subsection{Recovery Metric Formulation}
+Defense efficacy will be quantified by the recovery metric:
+\begin{equation}
+R_{\text{recovery}}(M) = \frac{M_{\text{defended}} - M_{\text{poisoned}}}{M_{\text{clean}} - M_{\text{poisoned}}}
+\end{equation}
+where $M \in \{\text{Spam Recall}, \text{Spam F1}\}$.
+
+\section{Stage 4 Protocol Freeze and Conclusion}
+The Stage 4 experimental protocol is frozen with the following specifications:
+\begin{enumerate}
+    \item Expansion to ten random seeds ($0, 1, \dots, 9$).
+    \item Execution of 510 total evaluations covering clean baselines, undefended poisoned pipelines, and defended retraining pipelines.
+    \item Logging of auditing detection precision, recall, and false positive rates against preserved ground-truth masks.
+\end{enumerate}
+
+The pilot study confirms that classical spam classifiers are acutely vulnerable to targeted label-flipping attacks, providing an empirical baseline for defense evaluation in Stage 4.
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}
