@@ -1,130 +1,89 @@
-# Stage 3 Frozen Protocol & Blueprint for Stage 4
+# Stage 3 Frozen Experimental Protocol & Stage 4 Blueprint
 
-## 1. Executive Summary & Purpose
-This document establishes the frozen experimental protocol resulting from Stage 3 data-poisoning foundations on the UCI Spambase dataset (4,601 instances, 57 continuous numerical features). By synthesizing empirical insights from the 3-seed pilot study (seeds 0, 1, 2; 81 total experimental runs), this protocol formalizes:
-1. Empirical answers to the core research questions regarding poisoning strategy, rate, and model robustness.
-2. The exact pipeline placement, algorithmic specification, and evaluation framework for the manually implemented label-auditing defense in Stage 4.
-3. The expanded 10-seed experimental design, artifact-saving rules, and statistical validation requirements.
+## 1. Purpose & Benchmarking Principles
+Following the benchmarking standards established in *"Just How Toxic Is Data Poisoning?"* (Schwarzschild et al., ICML 2021), data poisoning evaluations are highly sensitive to variations in dataset partitioning, hyperparameter selection, and preprocessing pipelines. This document formally **freezes** the experimental design verified during the Stage 3 pilot study ($81$ runs across seeds $0, 1, 2$) before scaling to the full 10-seed investigation and defense evaluation in Stage 4.
 
----
-
-## 2. Synthesis of Pilot Results & Research Question Answers
-
-### Core Research Question:
-> *How do poisoning strategy and poisoning rate affect the reliability of classical spam classifiers, and how much performance can a manually implemented label-auditing defense recover?*
-
-### Empirical Answers from Stage 3 Pilot (Seeds 0, 1, 2):
-1. **Impact of Poisoning Strategy (Availability vs. Integrity)**:
-   - **Random Label Flipping (Availability / Denial of Service)**:
-     - Inverts labels bidirectionally across the feature space ($0 \leftrightarrow 1$).
-     - Preserves overall class balance near baseline (~39.4% to 43.6% spam).
-     - Induces gradual, symmetric degradation across all metrics: accuracy drops by 5–10%, while spam recall decreases moderately (Random Forest drops from 91.37% to 83.25%; Logistic Regression from 89.72% to 80.12% at 20% poisoning).
-   - **Targeted Spam-to-Ham Flipping (Integrity / Evasion)**:
-     - Relabels only spam instances as legitimate non-spam ($1 \to 0$).
-     - Distorts the training class balance from 39.40% down to 19.40% at 20% poisoning (50.8% of all training spam mislabeled as benign).
-     - Induces catastrophic, stealthy collapse specifically in **Spam Recall**:
-       - **Logistic Regression**: Collapses from 89.72% to **19.22%** (-70.50% drop).
-       - **Random Forest**: Collapses from 91.37% to **30.54%** (-60.83% drop).
-       - **Decision Tree**: Drops to 51.10% with high seed variance ($\pm 4.3\%$).
-     - Crucially, **Spam Precision remains artificially high (~95%+)**, demonstrating that targeted evasion allows spam to evade detection without generating conspicuous false positive alarms on legitimate ham.
-
-2. **Model Family Robustness Hierarchy**:
-   - **Random Forest (Ensemble / Bagging)**: Demonstrates highest baseline accuracy (95.08%) and strong resilience up to 10% poisoning. Subspace feature randomization and multi-tree voting mitigate individual poisoned samples.
-   - **Logistic Regression (Linear Hyperplane)**: Highly susceptible to targeted label corruption. Mislabeled spam samples pull the global decision hyperplane toward the spam feature cluster, causing severe under-detection.
-   - **Decision Tree (Single Estimator)**: Exhibits high variance across seeds ($\pm 0.02 - 0.04$), as localized greedy recursive partitioning is vulnerable to perturbations near decision boundaries.
+Any subsequent modification to the parameters defined below must be explicitly recorded in the **Protocol Change Log** (Section 4).
 
 ---
 
-## 3. Stage 4 Defense Integration Blueprint: Label-Auditing
+## 2. Frozen Experimental Specifications
 
-### 3.1 Defense Pipeline Placement
-The manually implemented label-auditing defense operates under the **Filter-then-Train** paradigm. It sits strictly between the data collection/poisoning phase and final model induction:
+### 2.1 Dataset & Split Procedure
+* **Dataset:** UCI Spambase (`data/spambase.data`, `data/spambase.names`), comprising $4,601$ email instances ($2,788$ non-spam $[60.60\%]$, $1,813$ spam $[39.40\%]$) and $57$ continuous numerical features.
+* **Partitioning Function:** `src.data.split_data(df, test_size=0.2, random_state=seed)`
+* **Partition Ratio:** Stratified $80/20$ train-test split ($3,680$ training instances, $921$ test instances).
+* **Isolation Invariant:** The test set ($X_{\text{test}}, y_{\text{test}}$) is partitioned *before* any poisoning or feature scaling operation and remains bit-for-bit unchanged across all attack and defense evaluations.
 
-```
-[Clean Training Data] 
-         │
-         ▼
-[Adversarial Poisoning Attack] ──► [Contaminated Training Labels y_train_poisoned]
-                                                      │
-                                                      ▼
-                                       ┌─────────────────────────────┐
-                                       │   STAGE 4 DEFENSE MODULE    │
-                                       │   (Label-Auditing Filter)   │
-                                       └─────────────────────────────┘
-                                                      │
-                                                      ▼
-                                       [Sanitized Training Labels y_train_clean]
-                                                      │
-                                                      ▼
-                                       [Model Training (LR, DT, RF)]
-                                                      │
-                                                      ▼
-                                       [Evaluation on Isolated Test Set]
-```
+### 2.2 Random Seeds
+* **Stage 3 Pilot Seeds:** `seeds = [0, 1, 2]` ($3$ seeds).
+* **Stage 4 Full Experiment Seeds:** `seeds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]` ($10$ seeds).
+* **Seed Propagation Rule:** Within each condition, the active `seed` is passed identically to:
+  1. `train_test_split(..., random_state=seed)`
+  2. `random_label_flip(..., random_state=seed)` / `targeted_spam_to_ham(..., random_state=seed)`
+  3. All three model constructors (`random_state=seed`).
 
-### 3.2 Algorithmic Specification: Neighborhood Discrepancy Auditing (k-NN / LOF)
-Without using external adversarial libraries, Stage 4 will implement a custom label auditor:
-1. **Feature Distance Metric**: Standardize training features ($X_{\text{train}}$) using standard Z-score scaling fit strictly on training features.
-2. **Neighborhood Label Consistency**: For each training sample $i$, find its $k$ nearest neighbors in feature space ($k \in \{5, 10, 15\}$).
-3. **Suspicion Score**: Compute the label disagreement ratio:
-   $$S(x_i, y_i) = \frac{1}{k} \sum_{j \in \mathcal{N}_k(x_i)} \mathbb{I}(y_j \neq y_i)$$
-4. **Audit Action**:
-   - Samples with $S(x_i, y_i) > \tau$ (e.g., threshold $\tau = 0.60$) are flagged as suspicious.
-   - **Sanitization Strategy**: Either flip flagged labels to the local majority vote ($y_i \leftarrow \text{mode}(\mathcal{N}_k(x_i))$) or prune flagged instances from the training set.
+### 2.3 Poisoning Strategies & Rates
+* **Poisoning Rate Definition:**
+  $$\alpha = \frac{N_{\text{poison}}}{N_{\text{train}}}, \quad N_{\text{poison}} = \text{round}(3680 \times \alpha)$$
+* **Frozen Rate Grid:** `poison_rates = [0.0, 0.01, 0.05, 0.10, 0.20]` corresponding to exactly $\{0, 37, 184, 368, 736\}$ modified training labels.
+* **Attack Modalities:**
+  1. `clean` ($\alpha = 0.0$): Unmodified training labels.
+  2. `random` (`src.attacks.random_label_flip`): Uniform selection without replacement across all $3,680$ training samples; bidirectional inversion ($y_i \leftarrow 1 - y_i$).
+  3. `targeted` (`src.attacks.targeted_spam_to_ham`): Uniform selection without replacement restricted strictly to training spam samples ($y_i = 1$); unidirectional inversion ($1 \to 0$).
 
-### 3.3 Defense Evaluation Metrics
-1. **Auditing Detection Performance** (evaluated against the ground-truth `flipped_mask` preserved from the attack):
-   - **Detection Precision**: Fraction of flagged samples that were truly poisoned.
-   - **Detection Recall (TPR)**: Fraction of truly poisoned samples successfully flagged.
-   - **False Positive Rate (FPR)**: Fraction of clean samples falsely flagged.
-2. **Performance Recovery Score**:
-   $$R_{\text{recovery}}(M) = \frac{M_{\text{defended}} - M_{\text{poisoned}}}{M_{\text{clean}} - M_{\text{poisoned}}}$$
-   Where $M \in \{\text{Spam Recall}, \text{Spam F1}\}$. $R=1.0$ represents 100% complete recovery of clean baseline performance.
+### 2.4 Models & Fixed Hyperparameters
+All models are instantiated via `src.models.get_models(random_state=seed)` with frozen hyperparameters:
+1. **Logistic Regression:** `Pipeline([('scaler', StandardScaler()), ('clf', LogisticRegression(solver='liblinear', max_iter=2000, random_state=seed))])` — `StandardScaler` is fit strictly on `X_train` to prevent preprocessing leakage.
+2. **Decision Tree:** `DecisionTreeClassifier(max_depth=8, min_samples_leaf=5, random_state=seed)`
+3. **Random Forest:** `RandomForestClassifier(n_estimators=200, min_samples_leaf=2, random_state=seed)`
 
----
+### 2.5 Evaluation Metrics
+* **Primary Metrics:**
+  * `spam_recall` (Class 1 Recall / True Positive Rate): $\frac{\text{TP}}{\text{TP} + \text{FN}}$
+  * `spam_f1` (Class 1 F1-Score): $\frac{2 \cdot \text{Precision} \cdot \text{Recall}}{\text{Precision} + \text{Recall}}$
+* **Supporting Classification Metrics:**
+  * `spam_precision` (Class 1 Precision): $\frac{\text{TP}}{\text{TP} + \text{FP}}$
+  * `accuracy` (Overall Accuracy): $\frac{\text{TP} + \text{TN}}{\text{TP} + \text{TN} + \text{FP} + \text{FN}}$
+  * Confusion Matrix counts (`tn`, `fp`, `fn`, `tp`)
+* **Stage 4 Defense Evaluation Metrics:**
+  * **Auditing Detection Precision & Recall:** Evaluated by comparing the defense's flagged sample mask against the ground-truth `flipped_mask`.
+  * **Performance Recovery Ratio:**
+    $$R_{\text{recovery}}(M) = \frac{M_{\text{defended}} - M_{\text{poisoned}}}{M_{\text{clean}} - M_{\text{poisoned}}}, \quad M \in \{\text{Spam Recall}, \text{Spam F1}\}$$
 
-## 4. Full Stage 4 Experimental Grid & Protocol
+### 2.6 Standardized Filenames & Directory Structure
+* `src/data.py`, `src/attacks.py`, `src/models.py`, `src/metrics.py`, `src/experiments.py`, `src/visualization.py`
+* `tests/test_attacks.py`
+* `scripts/run_attack_experiments.py`
+* `results/stage3_pilot_results.csv` (Frozen 81-row Stage 3 benchmark)
+* `results/stage4_full_results.csv` (Reserved for 10-seed Stage 4 benchmark)
+* `notebooks/01_baseline_and_first_attack.ipynb`
+* `notebooks/02_attack_validation.ipynb`
+* `notebooks/03_pilot_experiment.ipynb`
+* `notebooks/04_pilot_analysis.ipynb`
+* `paper/main.tex` and `paper/references.bib`
 
-### 4.1 Ten Random Seeds
-The complete investigation expands from 3 seeds (0, 1, 2) to **ten random seeds: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9**.
-
-### 4.2 Matrix of Experimental Conditions
-- **Dataset**: UCI Spambase (4,601 rows, 57 features, stratified 80/20 train/test split per seed).
-- **Poisoning Rates**: 0%, 1%, 5%, 10%, 20%.
-- **Attacks**: Clean Baseline, Random Label Flipping, Targeted Spam-to-Ham.
-- **Models**:
-  - Standardized Logistic Regression (`solver="liblinear"`, `max_iter=2000`, `random_state=seed`)
-  - Decision Tree (`max_depth=8`, `min_samples_leaf=5`, `random_state=seed`)
-  - Random Forest (`n_estimators=200`, `min_samples_leaf=2`, `random_state=seed`)
-- **Total Experimental Runs**:
-  - Baseline: 10 seeds $\times$ 3 models = 30 rows
-  - Undefended Poisoned: 10 seeds $\times$ 2 attacks $\times$ 4 rates $\times$ 3 models = 240 rows
-  - Defended Pipeline: 10 seeds $\times$ 2 attacks $\times$ 4 rates $\times$ 3 models = 240 rows
-  - **Total Stage 4 Grid: 510 evaluations**.
-
-### 4.3 Expanded Metric Set
-Every condition records:
-1. `seed` (0–9)
-2. `attack` (`clean`, `random`, `targeted`)
-3. `poison_rate` (0.0, 0.01, 0.05, 0.10, 0.20)
-4. `defense_applied` (`none`, `knn_audit`, `prune_audit`)
-5. `model` (LR, DT, RF)
-6. `n_poisoned` (exact count)
-7. `n_detected` (auditor flags)
-8. `audit_precision`, `audit_recall`, `audit_fpr`
-9. `accuracy`, `spam_precision`, `spam_recall`, `spam_f1`
-10. `recovery_recall`, `recovery_f1`
-11. Confusion matrix entries (`tn`, `fp`, `fn`, `tp`)
+### 2.7 Plotting & Visualization Rules
+* **Resolution:** Minimum `120 DPI` inline, `300 DPI` for exported publication figures.
+* **Color Palette (Colorblind-Safe):**
+  * Logistic Regression / Ham Class: `#2b5c8f` (Deep Blue, solid line `-`, circle marker `o`)
+  * Decision Tree: `#7570b3` (Purple, dashed line `--`, triangle marker `^`)
+  * Random Forest: `#1b9e77` (Teal Green, dash-dot line `-.`, square marker `s`)
+  * Poisoned / Spam Class Highlight: `#d95f02` (Burnt Orange)
+* **Uncertainty Representation:** All multi-seed line plots must display the cross-seed **Mean** curve accompanied by a shaded **$\pm 1\ \text{Std}$** error band (`alpha=0.15`).
 
 ---
 
-## 5. Artifact Saving & Reproducibility Rules
+## 3. Stage 4 Defense Integration Plan (Label Auditing)
+In Stage 4, the manually implemented $k$-NN neighborhood label-auditing defense will be inserted strictly between the poisoning step and model fitting (**Filter-then-Train**):
+1. Standardize `X_train` using `StandardScaler` fit only on `X_train`.
+2. For each training instance $x_i$, query its $k$ nearest neighbors ($k=10$) in Euclidean feature space and compute the neighbor label disagreement ratio $S(x_i, y_i)$.
+3. Flag instances with $S(x_i, y_i) > \tau$ and sanitize `y_train_poisoned` (comparing majority-vote relabeling vs. sample pruning) before fitting the three classifiers.
 
-1. **Repository Structure**:
-   - `results/stage3_pilot_results.csv`: Frozen 81-row pilot benchmark.
-   - `results/stage4_full_results.csv`: Complete 10-seed undefended and defended benchmark.
-   - `figures/`: High-resolution vector figures (PDF/PNG at 300 DPI) for conference inclusion.
-2. **Invariants & Testing**:
-   - All tests in `tests/test_attacks.py` and `tests/test_defense.py` must achieve 100% pass rate before experiment execution.
-   - Every script must execute from clean CLI: `python scripts/run_attack_experiments.py`.
-   - Git commit hash must be embedded into the header of generated result tables.
+---
+
+## 4. Protocol Change Log
+
+| Date | Version | Component Modified | Reason for Change | Approved By |
+| :--- | :--- | :--- | :--- | :--- |
+| 2026-10-17 | `v1.0-frozen` | Initial Protocol Freeze | Completed 5-point Stage 3 pilot audit (81/81 rows verified) | Quancheng |
