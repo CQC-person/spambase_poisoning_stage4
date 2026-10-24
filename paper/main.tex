@@ -19,7 +19,7 @@ Advisor: Yuanyi}
 \maketitle
 
 \begin{abstract}
-Training-time data poisoning poses a critical security threat to machine-learning-based spam filters by corrupting supervision signals prior to model induction. In this study, we investigate how poisoning strategy and poisoning rate affect the reliability of three classical spam classifiers---standardized Logistic Regression, Decision Trees, and Random Forests---on the UCI Spambase dataset (4,601 emails, 57 numerical features), and how much performance a manually implemented label-auditing defense can recover. We evaluate random bidirectional label flipping (availability attack) and targeted spam-to-ham label flipping (integrity evasion attack) across poisoning rates of 0\%, 1\%, 5\%, 10\%, and 20\% over a three-seed pilot study (81 runs). Our audited pilot results confirm that while random flipping induces gradual, symmetric accuracy degradation, targeted spam-to-ham flipping causes a severe collapse in spam recall: at 20\% poisoning, Logistic Regression spam recall drops from 89.72\% to 19.22\%, while spam precision remains above 93\%, creating a stealthy evasion blind spot. Furthermore, we establish the frozen experimental protocol for Stage 4, expanding to ten random seeds (0--9) and integrating a $k$-nearest-neighbor label-auditing defense.
+Training-time data poisoning poses a critical security threat to machine-learning-based spam filters by corrupting supervision signals prior to model induction. In this study, we investigate how poisoning strategy and poisoning rate affect the reliability of three classical spam classifiers---standardized Logistic Regression, Decision Trees, and Random Forests---on the UCI Spambase dataset (4,601 emails, 57 numerical features), and how effectively two manually implemented label-auditing defenses can recover lost performance. Following an audited three-seed pilot study (81 runs), we execute the full ten-seed attack benchmark (seeds 0--9, 270 runs) across random bidirectional label flipping (availability attack) and targeted spam-to-ham label flipping (integrity evasion attack) at poisoning rates of 0\%, 1\%, 5\%, 10\%, and 20\%. Across 10 seeds, random label flipping induces gradual degradation: at 20\% random poisoning, mean spam recall declines from 88.48\% to 79.89\% for Logistic Regression, from 87.08\% to 80.91\% for Decision Tree, and from 91.98\% to 87.69\% for Random Forest. In contrast, 20\% targeted spam-to-ham poisoning triggers a severe recall collapse---reducing Logistic Regression spam recall to 21.54\%, Random Forest to 31.46\%, and Decision Tree to 45.07\%---while maintaining spam precision between 94.35\% and 98.81\%. We also document an empirical model-family crossover at 10\%--20\% targeted poisoning and establish the frozen protocol for evaluating primary $k$-NN neighborhood-disagreement auditing and extended five-fold out-of-fold logistic-regression auditing.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -31,12 +31,12 @@ Statistical and machine learning classifiers form the backbone of modern email s
 
 This research project is centered on the following overarching question:
 \begin{quote}
-\textit{How do poisoning strategy and poisoning rate affect the reliability of classical spam classifiers, and how much performance can a manually implemented label-auditing defense recover?}
+\textit{How do poisoning strategy and poisoning rate affect the reliability of classical spam classifiers, and how effectively can two manually implemented label-auditing methods recover lost performance?}
 \end{quote}
 
-To answer this question rigorously, Stage 3 of our project establishes a validated, reproducible data-poisoning pipeline and conducts a three-seed pilot study. Specifically, our contributions in this manuscript draft include: (1) formulating a formal training-time threat model grounded in the NIST Adversarial Machine Learning taxonomy \cite{nist2024adversarial}, (2) implementing unit-tested random and targeted label-flipping attacks under strict benchmarking controls \cite{schwarzschild2021just}, (3) analyzing pilot empirical findings including model-family crossover phenomena, and (4) freezing the Stage 4 experimental protocol for a 10-seed label-auditing defense evaluation.
+To answer this question rigorously, our study proceeds from a validated three-seed Stage 3 pilot (81 runs) to a ten-seed Stage 4 investigation (270 attack runs). Specifically, our contributions up to Stage 4 Week 1 include: (1) formulating a formal training-time threat model grounded in the NIST Adversarial Machine Learning taxonomy \cite{nist2024adversarial}, (2) implementing unit-tested random and targeted label-flipping attacks under strict benchmarking controls \cite{schwarzschild2021just}, (3) executing and analyzing the complete 10-seed attack benchmark while separating direct empirical observations from tentative mechanistic explanations, and (4) establishing the Stage 4 evaluation protocol comparing primary $k$-NN neighborhood-disagreement auditing and extended five-fold out-of-fold logistic-regression auditing.
 
-\section{Background}
+\section{Background and Threat Model}
 
 \subsection{Classical Spam Classification}
 Tabular email representations based on lexical and character frequency statistics remain foundational benchmarks for evaluating classifier robustness \cite{hopkins1999spambase}. Linear classifiers such as Logistic Regression learn a single global separating hyperplane in standardized feature space, whereas non-parametric tree models (Decision Trees and Random Forests \cite{breiman2001random}) partition the feature space via hierarchical axis-aligned thresholds. Understanding how these distinct inductive biases respond to corrupted training labels is essential for secure deployment.
@@ -51,7 +51,7 @@ Following the taxonomy of Barreno et al. \cite{barreno2010security} and Biggio e
 \subsection{Why Poisoning Benchmarks Require Consistent Conditions}
 As demonstrated by Schwarzschild et al. \cite{schwarzschild2021just} in \textit{``Just How Toxic Is Data Poisoning?''}, poisoning evaluations across literature often yield contradictory conclusions due to unstandardized experimental conditions. Variations in train-test splits, hyperparameter tuning on poisoned validation sets, or inconsistent definitions of poison budgets confound model comparisons. Consequently, a trustworthy poisoning benchmark must enforce identical data partitions per seed, identical poisoned sample sets across competing models, fixed hyperparameters, and strict clean-test separation.
 
-\section{Threat Model}
+\subsection{Formal Threat Model}
 Grounded in the NIST Adversarial Machine Learning taxonomy (NIST AI 100-2e2023) \cite{nist2024adversarial}, we define our formal threat model across six structural components:
 \begin{enumerate}
     \item \textbf{Protected System:} An automated email spam classification pipeline utilizing classical supervised classifiers (standardized Logistic Regression, Decision Tree, and Random Forest) trained on tabular email features.
@@ -62,7 +62,7 @@ Grounded in the NIST Adversarial Machine Learning taxonomy (NIST AI 100-2e2023) 
     \item \textbf{Likely Harm:} Delivery of phishing, malware, and commercial spam to end-user inboxes (false negatives) or loss of legitimate correspondence (false positives).
 \end{enumerate}
 
-\section{Methods}
+\section{Dataset and Methods}
 
 \subsection{Dataset and Leakage-Free Splitting Procedure}
 We utilize the UCI Spambase dataset \cite{hopkins1999spambase}, which contains $4,601$ emails described by $57$ continuous numerical features ($48$ word frequency percentages $\mathtt{word\_freq\_WORD}$, $6$ character frequency percentages $\mathtt{char\_freq\_CHAR}$, and $3$ uppercase run-length statistics) and a binary target $\mathtt{is\_spam} \in \{0, 1\}$ ($2,788$ ham $[60.60\%]$ and $1,813$ spam $[39.40\%]$).
@@ -91,27 +91,176 @@ Within each $(\text{seed}, \text{attack}, \alpha)$ condition, three classifiers 
 \subsection{Evaluation Metrics and Stage 4 Defense Protocol}
 Primary evaluation metrics on the clean test set are \textbf{Spam Recall} and \textbf{Spam F1}, supported by \textbf{Spam Precision}, \textbf{Accuracy}, and confusion matrices.
 
-In Stage 3, we execute a three-seed pilot ($s \in \{0, 1, 2\}$), producing $9$ clean baseline rows and $72$ poisoned condition rows ($81$ total runs). In Stage 4, this frozen protocol expands to ten seeds ($s \in \{0, \dots, 9\}$) and introduces a manually implemented $k$-NN neighborhood label-auditing defense that flags training samples whose labels disagree with a threshold fraction $\tau$ of their $k$ nearest neighbors in standardized feature space.
-
-\section{Pilot Results Summary}
-Table~\ref{tab:pilot_summary} summarizes the audited 3-seed pilot outcomes at $\alpha = 0\%$ (clean baseline) and $\alpha = 20\%$ poisoning. Across all three models, targeted spam-to-ham flipping reduces spam recall far more severely than random flipping. Notably, at $20\%$ targeted poisoning, Logistic Regression spam recall collapses from $89.72\%$ to $19.22\%$, while Decision Tree retains higher recall ($51.10\%$) than Random Forest ($30.54\%$) due to localized greedy axis splits surviving global cluster dilution.
+Following the audited three-seed Stage 3 pilot ($s \in \{0, 1, 2\}$, $81$ runs in $\mathtt{results/stage3\_pilot\_results.csv}$, summarized in Table~\ref{tab:pilot_summary}), Stage 4 expands the frozen protocol to ten seeds ($s \in \{0, \dots, 9\}$, $270$ runs in $\mathtt{results/attack\_results.csv}$). In subsequent Stage 4 weeks, we evaluate two manually implemented label-auditing defenses: (1) a primary $k$-NN neighborhood-disagreement defense ($k=10$, suspicion threshold $\tau = 0.5$) that flags and removes training samples whose labels disagree with at least half of their $10$ nearest other training neighbors in standardized feature space, and (2) an extended five-fold out-of-fold ($\mathtt{StratifiedKFold}$) standardized logistic-regression auditing defense (flagging samples with out-of-fold suspicion score $1 - \hat{p}_{\text{OOF}}(y_i \mid x_i) \ge 0.8$), compared head-to-head under identical $10\%$ poisoning conditions across detection precision, detection recall, detection F1, clean samples incorrectly removed, runtime, and recovery of spam recall and spam F1.
 
 \begin{table}[htbp]
-\caption{Stage 3 Pilot Summary (Mean Across Seeds 0, 1, 2)}
+\caption{Audited Stage 3 Pilot Summary (Mean $\pm$ Std Across Seeds 0, 1, 2; Generated from $\mathtt{stage3\_pilot\_results.csv}$)}
 \label{tab:pilot_summary}
 \centering
+\resizebox{\columnwidth}{!}{%
 \begin{tabular}{lccccc}
 \toprule
 & \multicolumn{2}{c}{\textbf{Clean (0\%)}} & \textbf{Random (20\%)} & \multicolumn{2}{c}{\textbf{Targeted (20\%)}} \\
 \cmidrule(lr){2-3} \cmidrule(lr){4-4} \cmidrule(lr){5-6}
 \textbf{Model} & \textbf{Recall} & \textbf{F1} & \textbf{Recall} & \textbf{Recall} & \textbf{Prec.} \\
 \midrule
-Logistic Reg. & 0.8972 & 0.9114 & 0.8062 & \textbf{0.1922} & 0.9365 \\
-Decision Tree & 0.8861 & 0.9010 & 0.8246 & 0.5110 & 0.9590 \\
-Random Forest & \textbf{0.9137} & \textbf{0.9360} & \textbf{0.8329} & 0.3054 & \textbf{0.9847} \\
+Logistic Reg. & $0.8972 \pm 0.0111$ & $0.9114 \pm 0.0050$ & $0.8191 \pm 0.0214$ & $\mathbf{0.1928 \pm 0.0208}$ & $0.9365 \pm 0.0205$ \\
+Decision Tree & $0.8861 \pm 0.0016$ & $0.9010 \pm 0.0028$ & $0.8017 \pm 0.0225$ & $0.5106 \pm 0.0777$ & $0.9590 \pm 0.0236$ \\
+Random Forest & $\mathbf{0.9137 \pm 0.0080}$ & $\mathbf{0.9360 \pm 0.0024}$ & $\mathbf{0.8770 \pm 0.0177}$ & $0.3039 \pm 0.0396$ & $\mathbf{0.9847 \pm 0.0065}$ \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\section{Attack Results}
+
+\subsection{Experimental Completeness and Clean Baseline Performance}
+We executed all $270$ experimental runs across seeds $0$ through $9$ ($30$ clean-baseline runs and $240$ poisoned-condition runs) and verified that $\mathtt{results/attack\_results.csv}$ contains zero missing values and exact poison counts ($N_{\text{poison}} \in \{0, 37, 184, 368, 736\}$). Table~\ref{tab:full_attack_results} reports the cross-seed mean and sample standard deviation ($\pm 1\ \text{Std}$) for every experimental condition.
+
+Under the clean baseline ($\alpha = 0\%$, Table~\ref{tab:full_attack_results}), Random Forest achieves the strongest overall performance across all four metrics, with accuracy of $0.9509 \pm 0.0049$, spam precision of $0.9541 \pm 0.0071$, spam recall of $0.9198 \pm 0.0144$, and spam F1 of $0.9366 \pm 0.0067$. Standardized Logistic Regression ranks second ($0.8848 \pm 0.0174$ spam recall, $0.9014 \pm 0.0109$ spam F1), while the single depth-8 Decision Tree trails slightly with $0.8708 \pm 0.0253$ spam recall and $0.8899 \pm 0.0129$ spam F1.
+
+\begin{table*}[htbp]
+\caption{Complete 10-Seed Attack Benchmark Results (Mean $\pm$ Sample Std Across Seeds 0--9; Programmatically Generated from $\mathtt{results/attack\_results.csv}$)}
+\label{tab:full_attack_results}
+\centering
+\begin{tabular}{llccccccc}
+\toprule
+\textbf{Attack} & \textbf{Rate ($\alpha$)} & $\mathbf{N_{\text{poison}}}$ & \textbf{Classifier} & \textbf{Accuracy} & \textbf{Spam Precision} & \textbf{Spam Recall} & \textbf{Spam F1} & $\mathbf{\Delta}$ \textbf{Recall (pp)} \\
+\midrule
+Clean & 0\% & 0 & Logistic Regression & $0.9238 \pm 0.0079$ & $0.9189 \pm 0.0105$ & $0.8848 \pm 0.0174$ & $0.9014 \pm 0.0109$ & $0.00$ \\
+Clean & 0\% & 0 & Decision Tree & $0.9152 \pm 0.0088$ & $0.9103 \pm 0.0093$ & $0.8708 \pm 0.0253$ & $0.8899 \pm 0.0129$ & $0.00$ \\
+Clean & 0\% & 0 & Random Forest & $\mathbf{0.9509 \pm 0.0049}$ & $\mathbf{0.9541 \pm 0.0071}$ & $\mathbf{0.9198 \pm 0.0144}$ & $\mathbf{0.9366 \pm 0.0067}$ & $0.00$ \\
+\midrule
+Random & 1\% & 37 & Logistic Regression & $0.9223 \pm 0.0097$ & $0.9214 \pm 0.0123$ & $0.8777 \pm 0.0199$ & $0.8989 \pm 0.0133$ & $-0.72$ \\
+Random & 1\% & 37 & Decision Tree & $0.9116 \pm 0.0118$ & $0.9129 \pm 0.0196$ & $0.8579 \pm 0.0162$ & $0.8844 \pm 0.0154$ & $-1.29$ \\
+Random & 1\% & 37 & Random Forest & $0.9501 \pm 0.0044$ & $0.9542 \pm 0.0052$ & $0.9174 \pm 0.0130$ & $0.9354 \pm 0.0061$ & $-0.25$ \\
+Random & 5\% & 184 & Logistic Regression & $0.9099 \pm 0.0079$ & $0.9141 \pm 0.0099$ & $0.8515 \pm 0.0212$ & $0.8815 \pm 0.0115$ & $-3.33$ \\
+Random & 5\% & 184 & Decision Tree & $0.9101 \pm 0.0072$ & $0.9139 \pm 0.0163$ & $0.8526 \pm 0.0197$ & $0.8820 \pm 0.0099$ & $-1.82$ \\
+Random & 5\% & 184 & Random Forest & $0.9496 \pm 0.0048$ & $0.9516 \pm 0.0068$ & $0.9190 \pm 0.0118$ & $0.9350 \pm 0.0065$ & $-0.08$ \\
+Random & 10\% & 368 & Logistic Regression & $0.9025 \pm 0.0072$ & $0.9146 \pm 0.0090$ & $0.8303 \pm 0.0228$ & $0.8702 \pm 0.0111$ & $-5.45$ \\
+Random & 10\% & 368 & Decision Tree & $0.9038 \pm 0.0095$ & $0.9035 \pm 0.0181$ & $0.8468 \pm 0.0239$ & $0.8740 \pm 0.0131$ & $-2.40$ \\
+Random & 10\% & 368 & Random Forest & $0.9443 \pm 0.0068$ & $0.9464 \pm 0.0038$ & $0.9102 \pm 0.0167$ & $0.9279 \pm 0.0093$ & $-0.96$ \\
+Random & 20\% & 736 & Logistic Regression & $0.8894 \pm 0.0078$ & $0.9098 \pm 0.0136$ & $0.7989 \pm 0.0268$ & $0.8504 \pm 0.0128$ & $-8.60$ \\
+Random & 20\% & 736 & Decision Tree & $0.8725 \pm 0.0117$ & $0.8599 \pm 0.0238$ & $0.8091 \pm 0.0231$ & $0.8334 \pm 0.0151$ & $-6.17$ \\
+Random & 20\% & 736 & Random Forest & $\mathbf{0.9229 \pm 0.0084}$ & $\mathbf{0.9239 \pm 0.0138}$ & $\mathbf{0.8769 \pm 0.0208}$ & $\mathbf{0.8996 \pm 0.0115}$ & $\mathbf{-4.30}$ \\
+\midrule
+Targeted & 1\% & 37 & Logistic Regression & $0.9219 \pm 0.0078$ & $0.9233 \pm 0.0104$ & $0.8747 \pm 0.0177$ & $0.8982 \pm 0.0108$ & $-1.02$ \\
+Targeted & 1\% & 37 & Decision Tree & $0.9139 \pm 0.0100$ & $0.9140 \pm 0.0112$ & $0.8628 \pm 0.0250$ & $0.8875 \pm 0.0143$ & $-0.80$ \\
+Targeted & 1\% & 37 & Random Forest & $0.9494 \pm 0.0067$ & $0.9576 \pm 0.0083$ & $0.9121 \pm 0.0171$ & $0.9342 \pm 0.0092$ & $-0.77$ \\
+Targeted & 5\% & 184 & Logistic Regression & $0.9015 \pm 0.0098$ & $0.9341 \pm 0.0127$ & $0.8074 \pm 0.0289$ & $0.8658 \pm 0.0154$ & $-7.74$ \\
+Targeted & 5\% & 184 & Decision Tree & $0.9051 \pm 0.0089$ & $0.9213 \pm 0.0121$ & $0.8303 \pm 0.0222$ & $0.8733 \pm 0.0130$ & $-4.05$ \\
+Targeted & 5\% & 184 & Random Forest & $0.9393 \pm 0.0078$ & $0.9708 \pm 0.0093$ & $0.8725 \pm 0.0234$ & $0.9188 \pm 0.0117$ & $-4.74$ \\
+Targeted & 10\% & 368 & Logistic Regression & $0.8496 \pm 0.0104$ & $0.9445 \pm 0.0124$ & $0.6573 \pm 0.0296$ & $0.7747 \pm 0.0197$ & $-22.75$ \\
+Targeted & 10\% & 368 & Decision Tree & $0.8860 \pm 0.0083$ & $0.9238 \pm 0.0250$ & $\mathbf{0.7760 \pm 0.0347}$ & $0.8426 \pm 0.0145$ & $\mathbf{-9.48}$ \\
+Targeted & 10\% & 368 & Random Forest & $\mathbf{0.8982 \pm 0.0058}$ & $\mathbf{0.9757 \pm 0.0068}$ & $0.7606 \pm 0.0156$ & $\mathbf{0.8547 \pm 0.0096}$ & $-15.92$ \\
+Targeted & 20\% & 736 & Logistic Regression & $0.6870 \pm 0.0148$ & $0.9563 \pm 0.0254$ & $0.2154 \pm 0.0364$ & $0.3504 \pm 0.0497$ & $-66.94$ \\
+Targeted & 20\% & 736 & Decision Tree & $\mathbf{0.7732 \pm 0.0373}$ & $0.9435 \pm 0.0247$ & $\mathbf{0.4507 \pm 0.0967}$ & $\mathbf{0.6046 \pm 0.0964}$ & $\mathbf{-42.01}$ \\
+Targeted & 20\% & 736 & Random Forest & $0.7283 \pm 0.0096$ & $\mathbf{0.9881 \pm 0.0103}$ & $0.3146 \pm 0.0250$ & $0.4767 \pm 0.0291$ & $-60.52$ \\
 \bottomrule
 \end{tabular}
+\end{table*}
+
+\subsection{Random vs. Targeted Poisoning: Availability Degradation vs. Integrity Evasion}
+Figures~\ref{fig:spam_recall} and \ref{fig:spam_f1} illustrate the cross-seed trajectories of Spam Recall and Spam F1 across poisoning rates, while Figure~\ref{fig:degradation_bars} directly contrasts the percentage-point losses under random versus targeted poisoning.
+
+\textbf{Direct Empirical Observations:} Under indiscriminate random label flipping (left panels of Figures~\ref{fig:spam_recall}--\ref{fig:spam_f1}), performance degrades gradually across all three classifiers. Even at $\alpha = 20\%$ ($736$ randomly inverted training labels), mean spam recall decreases by only $4.30$ percentage points for Random Forest ($0.9198 \to 0.8769 \pm 0.0208$), $6.17$ percentage points for Decision Tree ($0.8708 \to 0.8091 \pm 0.0231$), and $8.60$ percentage points for Logistic Regression ($0.8848 \to 0.7989 \pm 0.0268$), while spam F1 remains between $0.8334$ and $0.8996$ (Table~\ref{tab:full_attack_results}).
+
+In stark contrast, targeted spam-to-ham flipping (right panels of Figures~\ref{fig:spam_recall}--\ref{fig:spam_f1} and orange bars in Figure~\ref{fig:degradation_bars}) induces a nonlinear collapse in spam recall and spam F1 as $\alpha$ increases from $5\%$ to $20\%$. At $\alpha = 10\%$ ($368$ spam emails relabeled as ham), Logistic Regression spam recall drops by $22.75$ percentage points to $0.6573 \pm 0.0296$ (F1 $0.7747 \pm 0.0197$), and Random Forest recall drops by $15.92$ percentage points to $0.7606 \pm 0.0156$ (F1 $0.8547 \pm 0.0096$). At $\alpha = 20\%$ ($736$ spam emails relabeled as ham), Logistic Regression spam recall plunges by $66.94$ percentage points to $0.2154 \pm 0.0364$ (F1 $0.3504 \pm 0.0497$), Random Forest recall drops by $60.52$ percentage points to $0.3146 \pm 0.0250$ (F1 $0.4767 \pm 0.0291$), and Decision Tree recall drops by $42.01$ percentage points to $0.4507 \pm 0.0967$ (F1 $0.6046 \pm 0.0964$). Concurrently, as shown in the bottom-left panel of Figure~\ref{fig:multi_metric}, spam precision increases monotonically under targeted poisoning---reaching $0.9563 \pm 0.0254$ (Logistic Regression), $0.9435 \pm 0.0247$ (Decision Tree), and $0.9881 \pm 0.0103$ (Random Forest) at $\alpha = 20\%$.
+
+\textbf{Possible Mechanistic Explanation:} These observations strongly support Hypothesis~1. Because random flipping corrupts ham and spam in proportion to their base rates ($\approx 60.6\%$ ham flips to spam and $\approx 39.4\%$ spam flips to ham), the noise partially cancels along the decision boundary. Conversely, unidirectional spam-to-ham flipping concentrates all $N_{\text{poison}}$ corruptions on the positive class, reducing the apparent training spam proportion from $39.40\%$ ($1,450/3,680$) at $0\%$ poisoning to $29.40\%$ ($1,082/3,680$) at $10\%$ poisoning and $19.40\%$ ($714/3,680$) at $20\%$ poisoning. Classifiers consequently shift their decision boundaries deep into the positive class to avoid predicting spam, yielding near-zero false positives (high precision) at the expense of massive false negatives (collapsed recall).
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig1_spam_recall_vs_poison_rate.png}
+\caption{Spam Recall (Mean $\pm 1\ \text{Std}$ across seeds 0--9) versus poisoning rate under Random Label Flipping (left) and Targeted Spam-to-Ham Flipping (right).}
+\label{fig:spam_recall}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig2_spam_f1_vs_poison_rate.png}
+\caption{Spam F1-Score (Mean $\pm 1\ \text{Std}$ across seeds 0--9) versus poisoning rate under Random Label Flipping (left) and Targeted Spam-to-Ham Flipping (right).}
+\label{fig:spam_f1}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig3_random_vs_targeted_comparison.png}
+\caption{Percentage-point loss in Spam Recall (top row) and Spam F1 (bottom row) at 5\%, 10\%, and 20\% poisoning (Mean $\pm 1\ \text{Std}$ across seeds 0--9).}
+\label{fig:degradation_bars}
+\end{figure}
+
+\subsection{Confusion Matrix Analysis at 0\%, 10\%, and 20\% Poisoning}
+To inspect error modes directly, Table~\ref{tab:confusion_matrices} and Figure~\ref{fig:confusion_matrices} present the test-set confusion matrices ($N_{\text{test}} = 921$: $558$ true ham, $363$ true spam) at $0\%, 10\%,$ and $20\%$ poisoning for both Seed $0$ and the 10-seed average.
+
+\textbf{Direct Empirical Observations:} On the clean baseline ($0\%$, top row of Figure~\ref{fig:confusion_matrices} and Table~\ref{tab:confusion_matrices}), false negatives and false positives are well balanced: averaged across 10 seeds, Random Forest makes only $16.1 \pm 2.7$ false positives (FP) and $29.1 \pm 5.2$ false negatives (FN), Logistic Regression records $28.4 \pm 4.0$ FP and $41.8 \pm 6.3$ FN, and Decision Tree records $31.2 \pm 3.9$ FP and $46.9 \pm 9.2$ FN. Under $20\%$ random poisoning (Table~\ref{tab:confusion_matrices}), both error types rise moderately: Decision Tree mean FP increases from $31.2 \to 48.1$ and FN increases from $46.9 \to 69.3$, while Random Forest mean FP rises from $16.1 \to 26.3$ and FN rises from $29.1 \to 44.7$.
+
+Under targeted spam-to-ham poisoning (middle and bottom rows of Figure~\ref{fig:confusion_matrices}), the error shift is strictly asymmetric. At $10\%$ targeted poisoning, Logistic Regression mean FN nearly triples from $41.8 \to 124.4 \pm 10.7$ while mean FP drops from $28.4 \to 14.1 \pm 3.7$. At $20\%$ targeted poisoning, Logistic Regression misses $284.8 \pm 13.2$ of the $363$ test spam emails ($300$ missed on Seed $0$, leaving only $63$ true positives) while committing just $3.5 \pm 1.9$ false positives. Similarly, Random Forest mean FN jumps from $29.1 \to 248.8 \pm 9.1$ ($247$ missed on Seed $0$) while its mean FP drops to $1.4 \pm 1.3$ ($2$ on Seed $0$). Decision Tree exhibits a smaller mean FN increase to $199.4 \pm 35.1$ ($158$ missed on Seed $0$), retaining $163.6 \pm 35.1$ true positives across the 10 seeds.
+
+\begin{table}[htbp]
+\caption{Test-Set Confusion Matrix Breakdown at 0\%, 10\%, and 20\% Poisoning ($N_{\text{test}}=921$: $558$ Ham, $363$ Spam; 10-Seed Mean $\pm$ Std)}
+\label{tab:confusion_matrices}
+\centering
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{llcccc}
+\toprule
+\textbf{Condition} & \textbf{Model} & \textbf{TN (Ham)} & \textbf{FP (False Alarm)} & \textbf{FN (Missed Spam)} & \textbf{TP (Caught Spam)} \\
+\midrule
+Clean (0\%) & Logistic Reg. & $529.6 \pm 4.0$ & $28.4 \pm 4.0$ & $41.8 \pm 6.3$ & $321.2 \pm 6.3$ \\
+Clean (0\%) & Decision Tree & $526.8 \pm 3.9$ & $31.2 \pm 3.9$ & $46.9 \pm 9.2$ & $316.1 \pm 9.2$ \\
+Clean (0\%) & Random Forest & $541.9 \pm 2.7$ & $16.1 \pm 2.7$ & $29.1 \pm 5.2$ & $333.9 \pm 5.2$ \\
+\midrule
+Random (10\%) & Logistic Reg. & $529.8 \pm 3.6$ & $28.2 \pm 3.6$ & $61.6 \pm 8.3$ & $301.4 \pm 8.3$ \\
+Random (10\%) & Decision Tree & $525.0 \pm 7.0$ & $33.0 \pm 7.0$ & $55.6 \pm 8.7$ & $307.4 \pm 8.7$ \\
+Random (10\%) & Random Forest & $539.3 \pm 1.3$ & $18.7 \pm 1.3$ & $32.6 \pm 6.1$ & $330.4 \pm 6.1$ \\
+\midrule
+Random (20\%) & Logistic Reg. & $529.1 \pm 5.3$ & $28.9 \pm 5.3$ & $73.0 \pm 9.7$ & $290.0 \pm 9.7$ \\
+Random (20\%) & Decision Tree & $509.9 \pm 9.6$ & $48.1 \pm 9.6$ & $69.3 \pm 8.4$ & $293.7 \pm 8.4$ \\
+Random (20\%) & Random Forest & $531.7 \pm 5.5$ & $26.3 \pm 5.5$ & $44.7 \pm 7.5$ & $318.3 \pm 7.5$ \\
+\midrule
+Targeted (10\%) & Logistic Reg. & $543.9 \pm 3.7$ & $14.1 \pm 3.7$ & $124.4 \pm 10.7$ & $238.6 \pm 10.7$ \\
+Targeted (10\%) & Decision Tree & $534.3 \pm 9.3$ & $23.7 \pm 9.3$ & $81.3 \pm 12.6$ & $281.7 \pm 12.6$ \\
+Targeted (10\%) & Random Forest & $551.1 \pm 2.0$ & $6.9 \pm 2.0$ & $86.9 \pm 5.6$ & $276.1 \pm 5.6$ \\
+\midrule
+Targeted (20\%) & Logistic Reg. & $554.5 \pm 1.9$ & $3.5 \pm 1.9$ & $284.8 \pm 13.2$ & $78.2 \pm 13.2$ \\
+Targeted (20\%) & Decision Tree & $548.5 \pm 4.0$ & $9.5 \pm 4.0$ & $199.4 \pm 35.1$ & $163.6 \pm 35.1$ \\
+Targeted (20\%) & Random Forest & $556.6 \pm 1.3$ & $1.4 \pm 1.3$ & $248.8 \pm 9.1$ & $114.2 \pm 9.1$ \\
+\bottomrule
+\end{tabular}%
+}
 \end{table}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig5_confusion_matrices_0_10_20.png}
+\caption{Representative test-set confusion matrices on Seed 0 ($N_{\text{test}}=921$) at 0\% Clean Baseline (top), 10\% Targeted Poisoning (middle), and 20\% Targeted Poisoning (bottom).}
+\label{fig:confusion_matrices}
+\end{figure}
+
+\subsection{Model-Family Differences and the Decision Tree vs. Random Forest Crossover}
+Figures~\ref{fig:multi_metric} and \ref{fig:crossover_box} examine how susceptibility varies across the three classifier families.
+
+\textbf{Direct Empirical Observations:} Across all random poisoning rates ($1\%$--$20\%$) and low targeted poisoning rates ($1\%$--$5\%$), Random Forest consistently achieves the highest spam recall, spam F1, spam precision, and accuracy (Figure~\ref{fig:multi_metric}). Logistic Regression is the most vulnerable model under targeted poisoning at every rate $\ge 5\%$. However, comparing Decision Tree and Random Forest at $10\%$ and $20\%$ targeted poisoning reveals a notable crossover (Figure~\ref{fig:crossover_box}):
+\begin{enumerate}
+    \item At $\alpha = 10\%$ targeted poisoning, Decision Tree achieves a slightly higher 10-seed mean spam recall ($0.7760 \pm 0.0347$, range $[0.7218, 0.8237]$) than Random Forest ($0.7606 \pm 0.0156$, range $[0.7328, 0.7769]$), exceeding Random Forest in $6$ of the $10$ seeds, while Random Forest retains a higher mean spam F1 ($0.8547$ vs. $0.8426$) due to higher precision ($0.9757$ vs. $0.9238$).
+    \item At $\alpha = 20\%$ targeted poisoning, Decision Tree outperforms Random Forest on \textbf{both} mean spam recall ($0.4507 \pm 0.0967$ vs. $0.3146 \pm 0.0250$) and mean spam F1 ($0.6046 \pm 0.0964$ vs. $0.4767 \pm 0.0291$), achieving higher recall in $9$ out of $10$ seeds (all seeds except Seed $7$, where Decision Tree recall drops to $0.2397$ vs. Random Forest $0.3030$). At the same time, Decision Tree exhibits nearly four times the cross-seed recall standard deviation of Random Forest ($\pm 9.67\%$ vs. $\pm 2.50\%$).
+\end{enumerate}
+
+\textbf{Possible Mechanistic Interpretation (Unconfirmed Hypothesis):} One possible interpretation of this crossover is that at $20\%$ targeted poisoning---where $736$ of $1,450$ training spam instances ($50.8\%$) are relabeled as ham---spam becomes a slight minority even within dense spam regions of feature space. In a 200-tree Random Forest, bootstrap sampling and random feature subset selection ($\sqrt{57} \approx 7$ features per split) average predictions across diverse subspace trees; when slightly over half of the local training labels are $0$, ensemble averaging may systematically pull the forest's predicted spam probability below the $0.5$ threshold. Conversely, a single depth-8 Decision Tree deterministically selects the globally strongest coordinate splits across all $57$ features, which could allow isolated spam-majority leaves to persist on extreme lexical or character indicators, albeit with high sensitivity to which specific training instances are flipped in a given seed (as evidenced by its $\pm 9.67\%$ standard deviation and Seed $7$ drop). We emphasize that this explanation remains a \textit{tentative interpretation} rather than a confirmed causal mechanism; verifying it would require directly inspecting Random Forest vote distributions, predicted probabilities, or leaf-level impurity statistics.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig4_model_family_differences.png}
+\caption{Multi-metric comparison across model families for Targeted (solid lines with $\pm 1\ \text{Std}$ bands) and Random (dotted lines) poisoning across seeds 0--9.}
+\label{fig:multi_metric}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig6_seed_variance_and_crossover.png}
+\caption{Distribution of test-set Spam Recall across all 10 seeds at 10\% Targeted Poisoning (left) and 20\% Targeted Poisoning (right), illustrating the Decision Tree vs. Random Forest crossover and seed variance.}
+\label{fig:crossover_box}
+\end{figure}
 
 \bibliographystyle{IEEEtran}
 \bibliography{references}

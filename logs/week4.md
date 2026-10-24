@@ -8,3 +8,14 @@ Rather than hiding unexpected trends, I analyzed a key contradictory finding at 
 
 ## Next Steps
 With the experimental design frozen in `stage3_protocol.md` and the Introduction, Background, Threat Model, and Methods drafted in `paper/main.tex`, I am ready to begin Stage 4: expanding to 10 random seeds (0–9) and implementing the manual label-auditing defense to evaluate performance recovery.
+
+---
+
+## Post-Audit Correction Note (2026-10-24)
+Following advisor review prior to Stage 4, I reconciled the manually transcribed numbers in the written Stage 3 summaries against `results/stage3_pilot_results.csv` (the single source of truth) and the executed outputs of `notebooks/04_pilot_analysis.ipynb`:
+1. **Corrected 20% Poisoning Summary Values (Mean $\pm$ Sample Std across Seeds 0, 1, 2):**
+   - **20% Targeted Poisoning (`spam_recall`):** Logistic Regression drops from $89.72\% \pm 1.11\%$ to **$19.28\% \pm 2.08\%$** ($-70.43$ percentage points, previously written as $19.22\%$), Decision Tree drops from $88.61\% \pm 0.16\%$ to **$51.06\% \pm 7.77\%$** ($-37.56$ percentage points, previously written as $51.10\%$), and Random Forest drops from $91.37\% \pm 0.80\%$ to **$30.39\% \pm 3.96\%$** ($-60.97$ percentage points, previously written as $30.54\%$). Corresponding 20% targeted `spam_precision` values are $93.65\% \pm 2.05\%$ (Logistic Regression), $95.90\% \pm 2.36\%$ (Decision Tree), and $98.47\% \pm 0.65\%$ (Random Forest).
+   - **20% Random Poisoning (`spam_recall`):** Logistic Regression is **$81.91\% \pm 2.14\%$** (previously transcribed as $80.62\%$), Decision Tree is **$80.17\% \pm 2.25\%$** (previously transcribed as $82.46\%$), and Random Forest is **$87.70\% \pm 1.77\%$** (previously transcribed as $83.29\%$).
+   - All summary tables in `README.md`, `notebooks/04_pilot_analysis.ipynb`, and `paper/main.tex` are now generated programmatically from `results/stage3_pilot_results.csv`.
+2. **Epistemic Framing of the Decision Tree vs. Random Forest Crossover:** The explanation of why Decision Tree retains higher mean spam recall than Random Forest at 20% targeted poisoning ($51.06\%$ vs. $30.39\%$) has been revised across the notebook narrative and paper to be presented strictly as a **possible interpretation** rather than a confirmed causal mechanism. Demonstrating a causal mechanism would require direct empirical evidence from forest vote distributions, predicted probabilities, or an inspection of the relevant tree leaves.
+3. **Finalized Stage 4 Defense Protocol:** `stage3_protocol.md` has been updated (`v1.1-stage4-plan`) to specify $k$-NN neighborhood disagreement ($k=10, \tau=0.5$) as the primary label-auditing defense and five-fold out-of-fold (`StratifiedKFold`) standardized logistic regression ($s_i = 1 - \hat{p}_{\text{OOF}}(y_i \mid x_i) \ge 0.8$) as the extended model-based defense compared under identical 10% poisoning conditions.
