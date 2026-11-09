@@ -1,0 +1,7 @@
+Attack (10%),Model,Clean (FP/FN),Poisoned (FP/FN),k-NN Def (FP/FN),OOF Def (FP/FN)
+random,Logistic Regression,30 / 33 (Rec=0.9091),31 / 45 (Rec=0.8760),37 / 36 (Rec=0.9008),35 / 25 (Rec=0.9311)
+random,Decision Tree,29 / 41 (Rec=0.8871),36 / 46 (Rec=0.8733),32 / 62 (Rec=0.8292),40 / 48 (Rec=0.8678)
+random,Random Forest,16 / 28 (Rec=0.9229),19 / 26 (Rec=0.9284),13 / 37 (Rec=0.8981),17 / 24 (Rec=0.9339)
+targeted,Logistic Regression,30 / 33 (Rec=0.9091),19 / 110 (Rec=0.6970),19 / 73 (Rec=0.7989),21 / 88 (Rec=0.7576)
+targeted,Decision Tree,29 / 41 (Rec=0.8871),22 / 87 (Rec=0.7603),16 / 92 (Rec=0.7466),18 / 91 (Rec=0.7493)
+targeted,Random Forest,16 / 28 (Rec=0.9229),6 / 81 (Rec=0.7769),6 / 72 (Rec=0.8017),6 / 79 (Rec=0.7824)
