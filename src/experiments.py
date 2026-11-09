@@ -1,6 +1,7 @@
-"""Experiment execution and batch runner for multi-seed data poisoning studies (Stage 3 & Stage 4)."""
+"""Experiment execution and batch runner for multi-seed data poisoning & defense studies (Stage 3 & Stage 4)."""
 
 import os
+import time
 from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
@@ -9,6 +10,12 @@ from src.data import load_spambase, split_data
 from src.attacks import random_label_flip, targeted_spam_to_ham
 from src.models import get_models
 from src.metrics import evaluate_predictions
+from src.defense import (
+    knn_label_audit,
+    oof_logreg_label_audit,
+    evaluate_defense_auditing,
+    compute_recovery_ratio,
+)
 
 
 def run_single_condition(
@@ -17,34 +24,9 @@ def run_single_condition(
     attack: str,
     poison_rate: float
 ) -> List[Dict[str, Any]]:
-    """Execute a single experimental condition across all three classifiers.
-
-    Ensures that for a given (seed, attack, poison_rate) condition, all three models:
-    1. Receive the exact same train/test split.
-    2. Receive the exact same poisoned training labels.
-    3. Are evaluated on the strictly clean, isolated test set.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Clean Spambase dataset.
-    seed : int
-        Experiment random seed (used for split, attack, and model initialization).
-    attack : str
-        Attack type: 'clean', 'random', or 'targeted'.
-    poison_rate : float
-        Fraction of training samples to poison (0.0 for clean baseline).
-
-    Returns
-    -------
-    List[Dict[str, Any]]
-        Three result dictionaries (one per model) containing performance metrics
-        and confusion matrix counts (tn, fp, fn, tp).
-    """
-    # 1. Stratified 80/20 train-test split seeded with the experiment seed
+    """Execute a single experimental condition across all three classifiers."""
     X_train, X_test, y_train, y_test = split_data(df, test_size=0.2, random_state=seed)
 
-    # 2. Apply poisoning attack to training labels
     if poison_rate == 0.0 or attack == "clean":
         attack_name = "clean"
         y_train_poisoned = y_train.copy()
@@ -64,11 +46,9 @@ def run_single_condition(
     else:
         raise ValueError(f"Unknown attack type: '{attack}'. Supported: 'clean', 'random', 'targeted'.")
 
-    # 3. Instantiate the three models using the exact same experiment seed
     models = get_models(random_state=seed)
     condition_results = []
 
-    # 4. Train each model on the identical poisoned training set and evaluate on clean test set
     for model_name, model in models.items():
         try:
             model.fit(X_train, y_train_poisoned)
@@ -93,7 +73,6 @@ def run_single_condition(
                 "error_message": ""
             }
         except Exception as e:
-            # Explicitly log failures instead of silently deleting them
             row = {
                 "seed": seed,
                 "attack": attack_name,
@@ -168,18 +147,7 @@ def summarize_pilot_results(
 def aggregate_attack_results(
     csv_path: str = "results/attack_results.csv"
 ) -> pd.DataFrame:
-    """Aggregate all conditions in attack_results.csv by (attack, poison_rate, model) using Mean and Std.
-
-    Parameters
-    ----------
-    csv_path : str
-        Path to saved attack_results.csv.
-
-    Returns
-    -------
-    pd.DataFrame
-        Aggregated table across seeds with mean, std, and formatted 'Mean ± Std' strings.
-    """
+    """Aggregate all conditions in attack_results.csv by (attack, poison_rate, model) using Mean and Std."""
     df = pd.read_csv(csv_path)
     model_order = ["Logistic Regression", "Decision Tree", "Random Forest"]
     attack_order = ["clean", "random", "targeted"]
@@ -318,13 +286,7 @@ def run_full_attack_study(
     attacks: Optional[List[str]] = None,
     output_csv: Optional[str] = "results/attack_results.csv"
 ) -> pd.DataFrame:
-    """Run the complete 10-seed Stage 4 attack study generating exactly 270 result rows.
-
-    Structure:
-    - 30 clean-baseline rows: 10 seeds (0..9) x 1 rate (0.0) x 3 models
-    - 240 poisoned-condition rows: 10 seeds (0..9) x 2 attacks x 4 non-zero rates x 3 models
-    - Total: 270 rows saved to results/attack_results.csv (including confusion matrix counts tn, fp, fn, tp).
-    """
+    """Run the complete 10-seed Stage 4 attack study generating exactly 270 result rows."""
     if seeds is None:
         seeds = list(range(10))
     if poison_rates is None:
@@ -373,5 +335,265 @@ def run_full_attack_study(
         ]
         results_df[export_cols].to_csv(output_csv, index=False)
         print(f"\nSaved verified 270-row full attack results to: {output_csv}")
+
+    return results_df
+
+
+def run_defense_condition(
+    df: pd.DataFrame,
+    seed: int,
+    attack: str,
+    poison_rate: float,
+    defense_type: str = "knn",
+    clean_metrics_lookup: Optional[Dict[str, Dict[str, float]]] = None,
+    poisoned_metrics_lookup: Optional[Dict[str, Dict[str, float]]] = None,
+) -> List[Dict[str, Any]]:
+    """Execute a single defense condition (audit + filter + retrain all 3 models) and record all metrics.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Clean Spambase dataset.
+    seed : int
+        Random seed (0..9).
+    attack : str
+        'random' or 'targeted'.
+    poison_rate : float
+        Nonzero poisoning rate (e.g., 0.01, 0.05, 0.10, 0.20).
+    defense_type : str
+        'knn' (k=10, threshold=0.5) or 'oof_logreg' (n_splits=5, threshold=0.8).
+    """
+    X_train, X_test, y_train, y_test = split_data(df, test_size=0.2, random_state=seed)
+
+    if attack == "random":
+        y_train_poisoned, flipped_mask = random_label_flip(
+            y_train, poison_rate=poison_rate, random_state=seed
+        )
+    elif attack == "targeted":
+        y_train_poisoned, flipped_mask = targeted_spam_to_ham(
+            y_train, poison_rate=poison_rate, random_state=seed
+        )
+    else:
+        raise ValueError(f"Unsupported attack for defense evaluation: {attack}")
+
+    # Compute clean and poisoned reference metrics if not pre-supplied
+    if clean_metrics_lookup is None:
+        clean_rows = run_single_condition(df, seed=seed, attack="clean", poison_rate=0.0)
+        clean_metrics_lookup = {r["model"]: r for r in clean_rows}
+    if poisoned_metrics_lookup is None:
+        poisoned_rows = run_single_condition(df, seed=seed, attack=attack, poison_rate=poison_rate)
+        poisoned_metrics_lookup = {r["model"]: r for r in poisoned_rows}
+
+    # 1. Run label auditing strictly on (X_train, y_train_poisoned) without clean labels or test set
+    if defense_type == "knn":
+        audit_res = knn_label_audit(X_train, y_train_poisoned, k=10, threshold=0.5)
+    elif defense_type == "oof_logreg":
+        audit_res = oof_logreg_label_audit(
+            X_train, y_train_poisoned, n_splits=5, threshold=0.8, random_state=seed
+        )
+    else:
+        raise ValueError(f"Unknown defense_type: '{defense_type}'. Expected 'knn' or 'oof_logreg'.")
+
+    # 2. Evaluate detection accuracy strictly AFTER flagging
+    det_metrics = evaluate_defense_auditing(audit_res["flagged_mask"], flipped_mask)
+    X_defended = audit_res["X_train_defended"]
+    y_defended = audit_res["y_train_defended"]
+    audit_runtime_sec = float(audit_res["audit_runtime_sec"])
+
+    # 3. Retrain all three models on the sanitized training set and evaluate on clean test set
+    models = get_models(random_state=seed)
+    rows = []
+
+    for model_name, model in models.items():
+        t_fit0 = time.perf_counter()
+        model.fit(X_defended, y_defended)
+        y_pred = model.predict(X_test)
+        retrain_runtime_sec = time.perf_counter() - t_fit0
+        total_runtime_sec = audit_runtime_sec + retrain_runtime_sec
+
+        def_m = evaluate_predictions(y_test.to_numpy(), y_pred, model_name=model_name)
+        cln_m = clean_metrics_lookup[model_name]
+        psn_m = poisoned_metrics_lookup[model_name]
+
+        rec_recovery = compute_recovery_ratio(
+            def_m["spam_recall"], psn_m["spam_recall"], cln_m["spam_recall"]
+        )
+        f1_recovery = compute_recovery_ratio(
+            def_m["spam_f1"], psn_m["spam_f1"], cln_m["spam_f1"]
+        )
+
+        rows.append({
+            "defense": defense_type,
+            "seed": seed,
+            "attack": attack,
+            "poison_rate": poison_rate,
+            "model": model_name,
+            "n_train": det_metrics["n_train"],
+            "n_poisoned": det_metrics["n_poisoned"],
+            "n_flagged": det_metrics["n_flagged"],
+            "n_true_detected": det_metrics["n_true_detected"],
+            "n_clean_removed": det_metrics["n_clean_removed"],
+            "n_missed_poison": det_metrics["n_missed_poison"],
+            "frac_clean_removed": det_metrics["frac_clean_removed"],
+            "frac_train_removed": det_metrics["frac_train_removed"],
+            "detection_precision": det_metrics["detection_precision"],
+            "detection_recall": det_metrics["detection_recall"],
+            "detection_f1": det_metrics["detection_f1"],
+            "clean_accuracy": cln_m["accuracy"],
+            "clean_spam_precision": cln_m["spam_precision"],
+            "clean_spam_recall": cln_m["spam_recall"],
+            "clean_spam_f1": cln_m["spam_f1"],
+            "poisoned_accuracy": psn_m["accuracy"],
+            "poisoned_spam_precision": psn_m["spam_precision"],
+            "poisoned_spam_recall": psn_m["spam_recall"],
+            "poisoned_spam_f1": psn_m["spam_f1"],
+            "accuracy": def_m["accuracy"],
+            "spam_precision": def_m["spam_precision"],
+            "spam_recall": def_m["spam_recall"],
+            "spam_f1": def_m["spam_f1"],
+            "recall_gain": def_m["spam_recall"] - psn_m["spam_recall"],
+            "f1_gain": def_m["spam_f1"] - psn_m["spam_f1"],
+            "recovery_spam_recall": rec_recovery,
+            "recovery_spam_f1": f1_recovery,
+            "tn": int(def_m["tn"]),
+            "fp": int(def_m["fp"]),
+            "fn": int(def_m["fn"]),
+            "tp": int(def_m["tp"]),
+            "audit_runtime_sec": audit_runtime_sec,
+            "retrain_runtime_sec": retrain_runtime_sec,
+            "runtime_sec": total_runtime_sec,
+        })
+
+    return rows
+
+
+def run_knn_defense_study(
+    data_path: str = "data/spambase.data",
+    names_path: str = "data/spambase.names",
+    attack_results_csv: str = "results/attack_results.csv",
+    seeds: Optional[List[int]] = None,
+    poison_rates: Optional[List[float]] = None,
+    attacks: Optional[List[str]] = None,
+    output_csv: Optional[str] = "results/knn_defense_results.csv",
+) -> pd.DataFrame:
+    """Run Week 2 primary k-NN label-auditing defense across all nonzero rates and 10 seeds (240 rows)."""
+    if seeds is None:
+        seeds = list(range(10))
+    if poison_rates is None:
+        poison_rates = [0.01, 0.05, 0.10, 0.20]
+    if attacks is None:
+        attacks = ["random", "targeted"]
+
+    df = load_spambase(data_path=data_path, names_path=names_path)
+    attack_df = pd.read_csv(attack_results_csv) if os.path.exists(attack_results_csv) else None
+
+    all_rows = []
+    print(f"Starting Stage 4 Week 2 k-NN Defense Study (seeds={seeds}, rates={poison_rates})...")
+
+    for seed in seeds:
+        clean_lookup = None
+        if attack_df is not None:
+            c_sub = attack_df[(attack_df["seed"] == seed) & (attack_df["attack"] == "clean")]
+            if len(c_sub) == 3:
+                clean_lookup = {r["model"]: r for _, r in c_sub.iterrows()}
+
+        for attack in attacks:
+            for rate in poison_rates:
+                poison_lookup = None
+                if attack_df is not None:
+                    p_sub = attack_df[
+                        (attack_df["seed"] == seed)
+                        & (attack_df["attack"] == attack)
+                        & (np.isclose(attack_df["poison_rate"], rate))
+                    ]
+                    if len(p_sub) == 3:
+                        poison_lookup = {r["model"]: r for _, r in p_sub.iterrows()}
+
+                rows = run_defense_condition(
+                    df,
+                    seed=seed,
+                    attack=attack,
+                    poison_rate=rate,
+                    defense_type="knn",
+                    clean_metrics_lookup=clean_lookup,
+                    poisoned_metrics_lookup=poison_lookup,
+                )
+                all_rows.extend(rows)
+        print(f"  [Seed {seed}] Completed 24 k-NN defense runs (2 attacks x 4 rates x 3 models).")
+
+    results_df = pd.DataFrame(all_rows)
+    expected_rows = len(seeds) * len(attacks) * len(poison_rates) * 3
+    assert len(results_df) == expected_rows, f"Expected {expected_rows} rows, got {len(results_df)}"
+
+    if output_csv:
+        os.makedirs(os.path.dirname(output_csv), exist_ok=True)
+        results_df.to_csv(output_csv, index=False)
+        print(f"\nSaved verified {len(results_df)}-row k-NN defense results to: {output_csv}")
+
+    return results_df
+
+
+def run_oof_defense_study(
+    data_path: str = "data/spambase.data",
+    names_path: str = "data/spambase.names",
+    attack_results_csv: str = "results/attack_results.csv",
+    seeds: Optional[List[int]] = None,
+    poison_rates: Optional[List[float]] = None,
+    attacks: Optional[List[str]] = None,
+    output_csv: Optional[str] = "results/oof_defense_results.csv",
+) -> pd.DataFrame:
+    """Run Week 3 extended 5-fold out-of-fold logistic-regression defense at 10% poisoning across 10 seeds (60 rows)."""
+    if seeds is None:
+        seeds = list(range(10))
+    if poison_rates is None:
+        poison_rates = [0.10]
+    if attacks is None:
+        attacks = ["random", "targeted"]
+
+    df = load_spambase(data_path=data_path, names_path=names_path)
+    attack_df = pd.read_csv(attack_results_csv) if os.path.exists(attack_results_csv) else None
+
+    all_rows = []
+    print(f"Starting Stage 4 Week 3 5-Fold OOF Defense Study (seeds={seeds}, rates={poison_rates})...")
+
+    for seed in seeds:
+        clean_lookup = None
+        if attack_df is not None:
+            c_sub = attack_df[(attack_df["seed"] == seed) & (attack_df["attack"] == "clean")]
+            if len(c_sub) == 3:
+                clean_lookup = {r["model"]: r for _, r in c_sub.iterrows()}
+
+        for attack in attacks:
+            for rate in poison_rates:
+                poison_lookup = None
+                if attack_df is not None:
+                    p_sub = attack_df[
+                        (attack_df["seed"] == seed)
+                        & (attack_df["attack"] == attack)
+                        & (np.isclose(attack_df["poison_rate"], rate))
+                    ]
+                    if len(p_sub) == 3:
+                        poison_lookup = {r["model"]: r for _, r in p_sub.iterrows()}
+
+                rows = run_defense_condition(
+                    df,
+                    seed=seed,
+                    attack=attack,
+                    poison_rate=rate,
+                    defense_type="oof_logreg",
+                    clean_metrics_lookup=clean_lookup,
+                    poisoned_metrics_lookup=poison_lookup,
+                )
+                all_rows.extend(rows)
+        print(f"  [Seed {seed}] Completed {len(attacks)*len(poison_rates)*3} OOF defense runs.")
+
+    results_df = pd.DataFrame(all_rows)
+    expected_rows = len(seeds) * len(attacks) * len(poison_rates) * 3
+    assert len(results_df) == expected_rows, f"Expected {expected_rows} rows, got {len(results_df)}"
+
+    if output_csv:
+        os.makedirs(os.path.dirname(output_csv), exist_ok=True)
+        results_df.to_csv(output_csv, index=False)
+        print(f"\nSaved verified {len(results_df)}-row OOF defense results to: {output_csv}")
 
     return results_df

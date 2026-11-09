@@ -1,0 +1,12 @@
+# Research Log: Week 7 (Stage 4 Week 3) - Out-of-Fold Auditing Extension and Two-Defense Comparison
+
+## What I Learned
+In Week 3 of Stage 4, I implemented the five-fold out-of-fold (`StratifiedKFold(n_splits=5, shuffle=True, random_state=seed)`) standardized logistic-regression auditing defense in `src/defense.py` (`compute_oof_logreg_scores` and `oof_logreg_label_audit`), verified via unit tests in `tests/test_defense.py` that every training instance receives exactly one out-of-fold probability prediction with complete test-set isolation, and generated the 10-seed evaluation at 10% poisoning (`results/oof_defense_results.csv`, 60 rows). Comparing both defenses under identical 10% poisoning conditions (`notebooks/07_defense_comparison.ipynb`) revealed a clear precision–recall trade-off between global margin auditing and local neighborhood auditing:
+- Under **10% random poisoning**, 5-fold OOF ($\tau_{\text{OOF}}=0.8$) achieves much higher detection precision ($83.09\% \pm 1.68\%$ vs. $43.81\% \pm 1.02\%$), higher detection F1 ($61.51\%$ vs. $59.36\%$), and nearly $12\times$ lower false removal of clean data ($36.6$ [$1.11\%$] vs. $434.7$ [$13.12\%$] clean samples removed), outperforming $k$-NN across all three models (recovering $115.7\%$ of Logistic Regression recall, $51.7\%$ of Decision Tree recall, and $57.1\%$ of Random Forest recall).
+- Under **10% targeted poisoning**, unidirectional corruption shifts the logistic hyperplane toward the spam cluster, reducing OOF detection recall to $19.35\% \pm 1.62\%$ (precision $57.29\%$, clean removed $1.60\%$) compared to $k$-NN's $75.92\% \pm 2.87\%$ detection recall. Consequently, $k$-NN recovers more Logistic Regression recall ($40.2\%$ vs. $27.5\%$) and F1 ($44.6\%$ vs. $34.4\%$), whereas 5-fold OOF's low false-removal rate yields better Random Forest recovery ($11.9\%$ recall and $16.0\%$ F1 recovery vs. $4.2\%$ and $3.3\%$ for $k$-NN).
+
+## Error Analysis & Manuscript Drafting
+Inspecting Seed 0 training and test errors alongside `Defense Results`, `Discussion`, `Limitations`, and `Ethical Considerations` in `paper/main.tex` highlighted how personalized 1999 HP Labs tokens (`word_freq_george`, `word_freq_hp`, `word_freq_650`) limit direct generalization to modern production email filters.
+
+## Next Steps
+In Week 4, I will finalize the 6–8 page LaTeX paper (`paper/main.pdf`), `requirements.txt`, `reproducibility_check.md`, and `logs/week8.md`.
